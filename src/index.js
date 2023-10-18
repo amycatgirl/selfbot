@@ -65,7 +65,7 @@
     showModal() {
       const data = this.data;
 
-      debugCustomLogger.log("About to show modal", type, "with the following data:", data);
+      debugCustomLogger.log("About to show modal of type", this.type, "with the following data:", data);
 
       controllers.modal.push({
         type: this.type,
