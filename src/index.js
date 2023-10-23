@@ -232,12 +232,4 @@
   }
 
   debugCustomLogger.log("Revite Plugin Utilities v1.0.0 has been loaded!")
-
-  // TODO: Move this into a separate plugin  
-  window.theFunnyValueThatDefinitelyDoesntAffectAnythingInParticular =
-    rng(2500000);
-
-  setInterval(() => {
-    window.utils.scrambleServers(1);
-  }, window.theFunnyValueThatDefinitelyDoesntAffectAnythingInParticular);
 };
