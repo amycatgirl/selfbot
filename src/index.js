@@ -9,7 +9,7 @@
     name;
     /** @type {string} **/
     colour;
-    
+
     constructor(name, colour) {
       this.name = name;
       this.colour = colour;
@@ -17,19 +17,19 @@
 
     log(...data) {
       console.log(
-      `%c[${this.name}] ::%c`,
-      `font-weight: bold; color: ${this.colour}`,
-      "font-weight: initial; color: initial",
-      ...data,
+        `%c[${this.name}] ::%c`,
+        `font-weight: bold; color: ${this.colour}`,
+        "font-weight: initial; color: initial",
+        ...data,
       )
     }
   }
   window.utils = {};
-  
+
   // Allow other plugins to use this under the Utils Object  
-  window.utils.CustomLogger = CustomLogger; 
+  window.utils.CustomLogger = CustomLogger;
   const debugCustomLogger = new CustomLogger("revite-utils", "#FD6671");
-  
+
   /**
     Use Modals with ease, without having to fiddle with the controllers.modal class
     @class
@@ -81,7 +81,7 @@
     Generate a random number between 0 and limit
     @param {number} limit
     **/
-  function rng (limit) {
+  function rng(limit) {
     return Math.floor(Math.random() * limit);
   }
 
@@ -167,6 +167,31 @@
 
     debugCustomLogger.log("Set custom sound", sound, "to", url);
   };
+  
+  /**
+    Get the client's current server (index 0) and channel (index 1)
+  **/
+  window.utils.getCurrent = function() {
+    return window.location.pathname.match(/[0-7][0-9A-HJKMNP-TV-Z]{25}/g);
+  }
+
+  /**
+    @async
+    @returns {import("revolt.js").Client}
+    Returns a Revolt.js client
+  **/
+  window.utils.getCurrentClient = async function() {
+
+    const client = await new Promise((res) =>
+      setInterval(() => {
+        if (window.controllers.client.getReadyClient) {
+          res(window.controllers.client.getReadyClient());
+        }
+      }, 2000)
+    );
+
+    return client
+  }
 
   /**
      mmmm, scrambled eggs
