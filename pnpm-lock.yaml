@@ -8,6 +8,9 @@ devDependencies:
   minify:
     specifier: ^10.3.0
     version: 10.3.0
+  prettier:
+    specifier: ^3.0.3
+    version: 3.0.3
   revolt.js:
     specifier: ^6.0.20-patch.2
     version: 6.0.20
@@ -517,6 +520,12 @@ packages:
     requiresBuild: true
     dev: true
     optional: true
+
+  /prettier@3.0.3:
+    resolution: {integrity: sha512-L/4pUDMxcNa8R/EthV08Zt42WBO4h1rarVtK0K+QJG0X187OLo7l699jWw0GKuwzkPQ//jMFA/8Xm6Fh3J/DAg==}
+    engines: {node: '>=14'}
+    hasBin: true
+    dev: true
 
   /readjson@2.2.2:
     resolution: {integrity: sha512-PdeC9tsmLWBiL8vMhJvocq+OezQ3HhsH2HrN7YkhfYcTjQSa/iraB15A7Qvt7Xpr0Yd2rDNt6GbFwVQDg3HcAw==}

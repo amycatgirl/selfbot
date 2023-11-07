@@ -11,6 +11,7 @@
   "license": "MIT",
   "devDependencies": {
     "minify": "^10.3.0",
+    "prettier": "^3.0.3",
     "revolt.js": "^6.0.20-patch.2",
     "rimraf": "^5.0.5",
     "try-to-catch": "^3.0.1"

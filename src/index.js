@@ -1,235 +1,166 @@
 () => {
-  /**
-    Build a new logger with a custom name, inteded to be
-    used by plugins
-    @class
-    **/
-  class CustomLogger {
-    /** @type {string} **/
-    name;
-    /** @type {string} **/
-    colour;
+  const client = new Promise((res) => {
+        setTimeout(() => {
+          res(window.controllers.client.getReadyClient())
+        }, 5000)
+      });
 
-    constructor(name, colour) {
-      this.name = name;
-      this.colour = colour;
-    }
+  const PREFIX = "::";
 
-    log(...data) {
-      console.log(
-        `%c[${this.name}] ::%c`,
-        `font-weight: bold; color: ${this.colour}`,
-        "font-weight: initial; color: initial",
-        ...data,
-      )
-    }
-  }
-  window.utils = {};
+  // https://stackoverflow.com/a/7624821
+  function splitter(str, l){
+      var strs = [];
+      while(str.length > l){
+          var pos = str.substring(0, l).lastIndexOf(' ');
+          pos = pos <= 0 ? l : pos;
+          strs.push(str.substring(0, pos));
+          var i = str.indexOf(' ', pos)+1;
+          if(i < pos || i > pos+l)
+              i = pos;
+          str = str.substring(i);
+      }
+      strs.push(str);
+      return strs;
+  }  
 
-  // Allow other plugins to use this under the Utils Object  
-  window.utils.CustomLogger = CustomLogger;
-  const debugCustomLogger = new CustomLogger("revite-utils", "#FD6671");
+  /** @type {Map<string, Promise<(arguments: string[], context: import("revolt.js").Message) => void>>}**/
+  const utils = new Map();
 
   /**
-    Use Modals with ease, without having to fiddle with the controllers.modal class
-    @class
+    @param {string[]} ids
+    @param {import("revolt.js").Client} client
+    @param {import("revolt.js").Channel} channel
+    @returns {Promise<number>}
   **/
-  class ModalHelper {
+  async function generateArchive(ids, client, channel) {
+    const archive = [];
+    let messages_archived = 0;
+    // get messages from id
+    // check if message has replies, if so, recurse
+    // if not, then add message to array
+    // next one
     /**
-      @readonly
-      @type {string}
-      **/
-    type;
-    /**
-      @readonly
-      @type {object}
-    **/
-    data;
-    /**
-      @param {string} type - Modal Type
-      @param {object} data - Data to pass to the modal
-      **/
-    constructor(type, data) {
-      this.type = type;
-      this.data = data;
-    }
+      @param {string[]} ids
+      */
+    async function recurse(ids) { 
+      for await (const id of ids) {
+        // Dirty workaround to getting messages outside of cache
+        const message = client.messages.get(id) ??
+                        await channel.fetchMessage(id)
+        
+        console.log("got message", message);
+        
+        if (message.reply_ids ||  message.replies) await recurse(message.reply_ids ?? message.replies, message);
 
-    get Type() {
-      return this.type;
-    }
+         
+        const date = new Date(message.createdAt);
+        const formated_string = `${message.author.display_name || message.author.username} (${date.toDateString()} at ${date.toTimeString()})\n${message.content}\n [[context]](/server/${message.channel.server_id}/channel/${message.channel_id}/${message._id})`;
 
-    get Data() {
-      return this.data;
-    }
+        archive.push(formated_string);
 
-    showModal() {
-      const data = this.data;
-
-      debugCustomLogger.log("About to show modal of type", this.type, "with the following data:", data);
-
-      controllers.modal.push({
-        type: this.type,
-        ...data
-      })
-    }
-  }
-
-  // Expose the ModalHelper class to window
-  window.utils.ModalHelper = ModalHelper;
-
-  /**
-    Generate a random number between 0 and limit
-    @param {number} limit
-    **/
-  function rng(limit) {
-    return Math.floor(Math.random() * limit);
-  }
-
-  window.utils.rng = rng;
-
-  /**
-    Show the channel description modal using custom data
-    Doesn't depend on ModalHelper
-    @param {string} title - Title of the modal
-    @param {string} message - Contents of the modal
-    **/
-  window.utils.showCustomChannelModal = function(title, message) {
-    controllers.modal.push({
-      type: "channel_info",
-      channel: {
-        name: title,
-        description: message
+        messages_archived++;
       }
-    });
+    }
+    
+    const notes = await client.user.openDM();
+
+    await recurse(ids);
+
+    // if there aren't more ids then stop    
+    // join archive
+    const toSend = archive.join("\n");
+
+    // check if message can be sent
+    if (toSend.length > 2000) {
+      // if not, split then send batches one by one
+      const split = splitter(toSend, 2000);
+      const allMessages = split.map(async (m) => {
+        console.log("sending", m);
+        await notes.sendMessage(m)
+      });
+
+      await Promise.all(allMessages);
+
+    } else {
+      // if it can, then send full message
+      await notes.sendMessage(toSend);
+    }
+
+    return messages_archived;
   }
 
   /**
-    Find who and what was reacted to a message
-    Depends on ModalHelper
-    @param {string} message Valid message ID
-    **/
-  window.utils.GetReactions = function(message) {
-    /** @type {import("revolt.js").Client} **/
-    const client = window.controllers.client.getReadyClient();
-
-    if (!client) throw "Couldn't get a valid client, aborting";
-
-    debugCustomLogger.log("Got ready client:", client);
-
-    const foundMessage = client.messages.get(message);
-
-    if (!foundMessage) throw "Couldn't find message in cache, aborting";
-
-    debugCustomLogger.log("Found message:", foundMessage);
-
-    const reactions = foundMessage.reactions.data_;
-
-    /** @type {string[]} **/
-    const reactionData = [];
-
-    for (const [key, value] of reactions) {
-      debugCustomLogger.log("Pushing", key, value, "to Array");
-      reactionData.push(
-        `:${key}:: ${Array.from(value.get().values())
-          .map(
-            (value) => `<@${value}>`)
-          .join(", ")}`
-      );
-    }
-
-    /** @type {string} **/
-    const finalMessage = reactionData.join("\n");
-
-    const ReactionModal = new ModalHelper("channel_info", {
-      channel: {
-        name: "Reactions",
-        description: finalMessage
-      }
-    });
-
-    ReactionModal.showModal();
-  };
-
-  /**
-     Set a custom notification sound with ease
-     @param {"message" | "outbound" | "call_join" | "call_leave"} sound
-     @param {string} url
-     **/
-  window.utils.SetCustomSound = function(sound, url) {
-    const lastState = window.state.settings.get("notifications:sounds");
-    window.state.settings.set("notifications:sounds", {
-      ...lastState,
-      [sound]: {
-        path: url,
-        enabled: true,
-      },
-    });
-
-    debugCustomLogger.log("Set custom sound", sound, "to", url);
-  };
+    @param {string} name
+    @param {Promise<(arguments: string[], context: import("revolt.js").Message) => void>} callback
+  **/
+  function registerUtility(name, callback) {
+    utils.set(name, callback);
+  } 
   
-  /**
-    Get the client's current server (index 0) and channel (index 1)
-  **/
-  window.utils.getCurrent = function() {
-    return window.location.pathname.match(/[0-7][0-9A-HJKMNP-TV-Z]{25}/g);
-  }
+  /** @type {import("revolt.js").Client} **/
+  client.then((c) => {
+    if (c) console.log("hewwo :3\nselfbot is loaded ^^");
+    
+    registerUtility("addnote", async (args) => {
+      await c.user.openDM().then(channel => channel.sendMessage(args.join(" ")));
+    })
 
-  /**
-    @async
-    @returns {import("revolt.js").Client}
-    Returns a Revolt.js client
-  **/
-  window.utils.getCurrentClient = async function() {
+    registerUtility("listenbrainz", async (_, message) => {
+      if (message.channel)
+      await message.channel.sendMessage("My listenbrainz: https://listenbrainz.org/user/amycatgirl");
+    })
+    
+    registerUtility("archive", async (args, message) => {
+      /** @type {string[]} **/
+      const replies = args.length > 0 ? message.reply_ids ? [...args, ...message.reply_ids] : args : message.reply_ids;
 
-    const client = await new Promise((res) =>
-      setInterval(() => {
-        if (window.controllers.client.getReadyClient) {
-          res(window.controllers.client.getReadyClient());
+      console.log(replies);
+
+      if (!replies) throw "You didn't provide any message IDs or replies to messages.";
+      
+      await generateArchive(replies, c).then((count) => {
+        message.reply({
+          embeds: [
+            {
+              title: `${c.user.username}::self`,
+              description: `Archived ${count} message(s) to your Saved Notes`,
+              colour: "#CCF5AC"
+            }
+          ]
+        })
+      })
+    })
+
+    c.on("message", async (message) => {
+      /** @type {boolean} **/
+      const isMe = message.author._id === c.user._id;
+      const containsPrefix = message.content.startsWith(PREFIX) || false;
+      const args = message.content.slice(PREFIX.length).trim().split(/ +/);
+      const command = args.shift().toLowerCase();
+
+      if (isMe && containsPrefix) {
+        try {
+          /** @type {Promise<(args: string[], message: import("revolt.js").Message) => void>} */
+          const util = utils.get(command);
+
+          if (util) {
+            util(args, message).catch((e) => { throw e });
+          } else {
+            return
+          }
+        } catch (e) {
+          c.user.openDM().then((c) => c.sendMessage({
+            content: "",
+            embeds: [
+              {
+                title: "Selfbot Exception",
+                description: `\`\`\`txt\nJS TRACEBACK:\n${e.stack}\n\`\`\``,
+                color: "#D14081"
+              }
+            ]
+          }));
         }
-      }, 2000)
-    );
-
-    return client
-  }
-
-  /**
-     mmmm, scrambled eggs
-     @param {number} amount
-     **/
-  window.utils.scrambleServers = function(amount) {
-    /** @type {import("revolt.js").Server[]} **/
-    const orderedServers = window.state.ordering.orderedServers;
-    for (let i = 0; i <= amount; i++) {
-      const server = Math.floor(Math.random() * (orderedServers.length - 1));
-      const where = Math.floor(Math.random() * (orderedServers.length - 1));
-      debugCustomLogger.log("Moving server in position", server, "to position", where);
-      window.state.ordering.reorderServer(server, where);
-    }
-
-    return true;
-  };
-
-  /**
-     Toggle current theme's base.
-     **/
-  window.utils.toggleTheme = function() {
-    /** @type {"light" | "dark"} **/
-    const currentTheme = window.state.settings.theme.getBase()
-
-    debugCustomLogger.log("Changing theme from", currentTheme, "to", currentTheme === "light" ? "dark" : "light");
-
-    switch (currentTheme) {
-      case "light":
-        window.state.settings.theme.setBase("dark");
-        break;
-      case "dark":
-        window.state.settings.theme.setBase("light");
-        break;
-      default:
-        throw "Can't find current theme's base";
-    }
-  }
-
-  debugCustomLogger.log("Revite Plugin Utilities v1.0.0 has been loaded!")
+      }
+    })
+  });
 };
