@@ -42,6 +42,7 @@
     @link https://stackoverflow.com/a/57071072
   */
   function* chunk(s, maxBytes) {
+    console.log("dividing", s, "into chunks of", maxBytes, "bytes");
     const decoder = new TextDecoder("utf-8");
     let buf = new TextEncoder("utf-8").encode(s);
     while (buf.length) {
@@ -74,6 +75,8 @@
     const form = new FormData();
     form.append("file", file, name);
 
+    console.log("uploading", name);
+
     const id = await fetch("https://autumn.revolt.chat/attachments", {
       method: "POST",
       body: form,
@@ -101,6 +104,7 @@
       @param {string[]} ids
       */
     async function recurse(ids) {
+      console.log("recursing through", ids);
       for await (const id of ids) {
         // Dirty workaround to getting messages outside of cache
         const message =
@@ -123,6 +127,7 @@
         archive.push(formated_string);
 
         messages_archived++;
+        console.log("archived", messages_archived, "message(s) so far");
       }
     }
 
@@ -133,6 +138,9 @@
     // Log the date of the archive and store it
     const finishedDate = new Date();
 
+    console.log("archive generated at", finishedDate.toDateString());
+    console.log("generating files");
+
     const toSend = archive.join("\n");
 
     // Instead of sending the message right away, why don't I make a txt file and send the contents there?
@@ -140,30 +148,52 @@
     // But then we have the problem of sending a massive file (if i ever decide to make a channel archival mode or something)
 
     // mmm idk, i'll leave that for future me to figure out (hiiiiii, future me here. Why the fuck did you have to think about this)
-
-    // Don't create the blob just yet, silly. You need to check if the size is bigger than expected
-    // Otherwise autumn won't accept your meal
-    // const fileWithContentsToSend = new Blob([toSend], { type: "text/txt" });
-
     // Problem is, this is just 1 blob. I am probably going to have more than one blob.
-    // Do i really need to make this an array then upload all elements one by one?
-    /** @type {Blob} */
-    let blobWithContents;
 
-    if (new TextEncoder().encode(toSend).length > max_size * 1000000) {
+    // Do i really need to make this an array then upload all elements one by one?
+    // I'll make this a Blob[] since I might have more than 1 blob here.
+
+    // Amy why did you leave this undefined
+    /** @type {Blob[]} */
+    let blobs = [];
+
+    if (new TextEncoder().encode(toSend).length > MAX_SIZE * 1000000) {
       // Here is where I, somehow, split a fucking blob to make it fit within the max size
-      //
+      const ContentChunks = chunk(toSend, MAX_SIZE * 1000000);
+
+      // Loop through all generated chunks and make blobs out of them. Then push those blobs into the array
+      for (const chunk of ContentChunks) {
+        const blob = new Blob([chunk], { type: "text/txt" });
+        console.log("adding", blob.type, "to array");
+        blobs.push(blob);
+      }
+    } else {
+      blobs.push(new Blob([toSend], { type: "text/txt" }));
     } // else do absolutely nothing with it :trol:
 
-    // Whenever I have this ready
-    const attachment = await uploadAttachment(
-      fileWithContentsToSend,
-      `archive_${finishedDate.getDay()}_${finishedDate.getMonth()}_${finishedDate.getFullYear()}.txt`,
-    );
+    // Ok, now for the cool part, uploading each and every single blob into autumn and getting the ids into
+    // an array.
+    /** @type {string[]} */
+    let attachments = [];
+
+    for await (const [index, value] of blobs.entries()) {
+      // I guess I won't reach a rate limit any time soon right?
+      // :clueless:
+      const id = await uploadAttachment(
+        value,
+        `archive_${finishedDate.getDay()}_${finishedDate.getMonth()}_${finishedDate.getFullYear()}_(${
+          index + 1
+        }/${blobs.length}).md`,
+      );
+
+      attachments.push(id);
+    }
+
+    console.log("sending", attachments);
 
     await notes.sendMessage({
       content: "Hiiiiii here is your archive sweetie :33333",
-      attachments: [attachment],
+      attachments: attachments,
     });
 
     return messages_archived;
