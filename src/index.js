@@ -1,135 +1,225 @@
 () => {
   const client = new Promise((res) => {
-        setTimeout(() => {
-          res(window.controllers.client.getReadyClient())
-        }, 5000)
-      });
-
+    setTimeout(() => {
+      res(window.controllers.client.getReadyClient());
+    }, 5000);
+  });
+  /**
+    @type {string}
+    Prefix that the bot uses to check whether a message is a command
+  */
   const PREFIX = "::";
 
-  // https://stackoverflow.com/a/7624821
-  function splitter(str, l){
-      var strs = [];
-      while(str.length > l){
-          var pos = str.substring(0, l).lastIndexOf(' ');
-          pos = pos <= 0 ? l : pos;
-          strs.push(str.substring(0, pos));
-          var i = str.indexOf(' ', pos)+1;
-          if(i < pos || i > pos+l)
-              i = pos;
-          str = str.substring(i);
-      }
-      strs.push(str);
-      return strs;
-  }  
+  /**
+    @type {number}
+    Maximum file size permited by autumn (in megabytes)
+    Default is 20mb, but other instances may increase this number  
+  */
+  const MAX_SIZE = 20;
 
-  /** @type {Map<string, Promise<(arguments: string[], context: import("revolt.js").Message) => void>>}**/
+  // Dead code commented for now, I'll probably use this sooner or later
+  // https://stackoverflow.com/a/7624821
+  // function splitter(str, l) {
+  //   var strs = [];
+  //   while (str.length > l) {
+  //     var pos = str.substring(0, l).lastIndexOf(" ");
+  //     pos = pos <= 0 ? l : pos;
+  //     strs.push(str.substring(0, pos));
+  //     var i = str.indexOf(" ", pos) + 1;
+  //     if (i < pos || i > pos + l) i = pos;
+  //     str = str.substring(i);
+  //   }
+  //   strs.push(str);
+  //   return strs;
+  // }
+
+  /**
+    @param {string} s - Any string
+    @param {number} maxBytes - Maximum ammount of bytes that a chuck needs to have
+
+    Make chunks based on byte size
+
+    @link https://stackoverflow.com/a/57071072
+  */
+  function* chunk(s, maxBytes) {
+    const decoder = new TextDecoder("utf-8");
+    let buf = new TextEncoder("utf-8").encode(s);
+    while (buf.length) {
+      let i = buf.lastIndexOf(32, maxBytes + 1);
+      // If no space found, try forward search
+      if (i < 0) i = buf.indexOf(32, maxBytes);
+      // If there's no space at all, take all
+      if (i < 0) i = buf.length;
+      // This is a safe cut-off point; never half-way a multi-byte
+      yield decoder.decode(buf.slice(0, i));
+      buf = buf.slice(i + 1); // Skip space (if any)
+    }
+  }
+
+  /**
+    @type {Map<string, Promise<void>}
+    Hashmap of available commands
+  */
   const utils = new Map();
 
   /**
-    @param {string[]} ids
-    @param {import("revolt.js").Client} client
-    @param {import("revolt.js").Channel} channel
-    @returns {Promise<number>}
+    Upload something to autumn's attachment bucket
+
+    @param {Blob} file - Any blob that does not exeed autumn's file size limit
+    @param {string} name - Name of said attachment
+
+    @returns {Promise<string>} Vaild, single-use attachment ID
+    */
+  async function uploadAttachment(file, name) {
+    const form = new FormData();
+    form.append("file", file, name);
+
+    const id = await fetch("https://autumn.revolt.chat/attachments", {
+      method: "POST",
+      body: form,
+    })
+      .then((response) => response.json())
+      .then((json) => json.id);
+
+    return id;
+  }
+
+  /**
+    Generate a message archive and send it to the user's saved notes
+
+    @param {string[]} ids - IDs of the messages to archive
+    @param {import("revolt.js").Client} client - Revolt.JS Client
+    @param {import("revolt.js").Channel} channel - Channel (or context) in which the message was sent in
+    
+    @returns {Promise<number>} Number of messages archived, useful to display how many were they archived successfully.
   **/
   async function generateArchive(ids, client, channel) {
     const archive = [];
     let messages_archived = 0;
-    // get messages from id
-    // check if message has replies, if so, recurse
-    // if not, then add message to array
-    // next one
+
     /**
       @param {string[]} ids
       */
-    async function recurse(ids) { 
+    async function recurse(ids) {
       for await (const id of ids) {
         // Dirty workaround to getting messages outside of cache
-        const message = client.messages.get(id) ??
-                        await channel.fetchMessage(id)
-        
-        console.log("got message", message);
-        
-        if (message.reply_ids ||  message.replies) await recurse(message.reply_ids ?? message.replies, message);
+        const message =
+          client.messages.get(id) ?? (await channel.fetchMessage(id));
 
-         
+        if (!message) throw "Could not find this message...";
+
+        if (message.reply_ids || message.replies)
+          await recurse(message.reply_ids ?? message.replies, message);
+
         const date = new Date(message.createdAt);
-        const formated_string = `${message.author.display_name || message.author.username} (${date.toDateString()} at ${date.toTimeString()})\n${message.content}\n [[context]](/server/${message.channel.server_id}/channel/${message.channel_id}/${message._id})`;
+        const formated_string = `${
+          message.author.display_name || message.author.username
+        } (${date.toDateString()} at ${date.toTimeString()})\n${
+          message.content
+        }\n [[link]](/server/${message.channel.server_id}/channel/${
+          message.channel_id
+        }/${message._id})`;
 
         archive.push(formated_string);
 
         messages_archived++;
       }
     }
-    
+
     const notes = await client.user.openDM();
 
     await recurse(ids);
 
-    // if there aren't more ids then stop    
-    // join archive
+    // Log the date of the archive and store it
+    const finishedDate = new Date();
+
     const toSend = archive.join("\n");
 
-    // check if message can be sent
-    if (toSend.length > 2000) {
-      // if not, split then send batches one by one
-      const split = splitter(toSend, 2000);
-      const allMessages = split.map(async (m) => {
-        console.log("sending", m);
-        await notes.sendMessage(m)
-      });
+    // Instead of sending the message right away, why don't I make a txt file and send the contents there?
+    // That removes the need to split the messages into different messages and it's more bandwidth efficient (i think)
+    // But then we have the problem of sending a massive file (if i ever decide to make a channel archival mode or something)
 
-      await Promise.all(allMessages);
+    // mmm idk, i'll leave that for future me to figure out (hiiiiii, future me here. Why the fuck did you have to think about this)
 
-    } else {
-      // if it can, then send full message
-      await notes.sendMessage(toSend);
-    }
+    // Don't create the blob just yet, silly. You need to check if the size is bigger than expected
+    // Otherwise autumn won't accept your meal
+    // const fileWithContentsToSend = new Blob([toSend], { type: "text/txt" });
+
+    // Problem is, this is just 1 blob. I am probably going to have more than one blob.
+    // Do i really need to make this an array then upload all elements one by one?
+    /** @type {Blob} */
+    let blobWithContents;
+
+    if (new TextEncoder().encode(toSend).length > max_size * 1000000) {
+      // Here is where I, somehow, split a fucking blob to make it fit within the max size
+      //
+    } // else do absolutely nothing with it :trol:
+
+    // Whenever I have this ready
+    const attachment = await uploadAttachment(
+      fileWithContentsToSend,
+      `archive_${finishedDate.getDay()}_${finishedDate.getMonth()}_${finishedDate.getFullYear()}.txt`,
+    );
+
+    await notes.sendMessage({
+      content: "Hiiiiii here is your archive sweetie :33333",
+      attachments: [attachment],
+    });
 
     return messages_archived;
   }
 
   /**
     @param {string} name
-    @param {Promise<(arguments: string[], context: import("revolt.js").Message) => void>} callback
+    @param {Promise<void>} callback
   **/
   function registerUtility(name, callback) {
     utils.set(name, callback);
-  } 
-  
+  }
+
   /** @type {import("revolt.js").Client} **/
   client.then((c) => {
     if (c) console.log("hewwo :3\nselfbot is loaded ^^");
-    
+
     registerUtility("addnote", async (args) => {
-      await c.user.openDM().then(channel => channel.sendMessage(args.join(" ")));
-    })
+      await c.user
+        .openDM()
+        .then((channel) => channel.sendMessage(args.join(" ")));
+    });
 
     registerUtility("listenbrainz", async (_, message) => {
       if (message.channel)
-      await message.channel.sendMessage("My listenbrainz: https://listenbrainz.org/user/amycatgirl");
-    })
-    
+        await message.channel.sendMessage(
+          "My listenbrainz: https://listenbrainz.org/user/amycatgirl",
+        );
+    });
+
     registerUtility("archive", async (args, message) => {
       /** @type {string[]} **/
-      const replies = args.length > 0 ? message.reply_ids ? [...args, ...message.reply_ids] : args : message.reply_ids;
+      const replies =
+        args.length > 0
+          ? message.reply_ids
+            ? [...args, ...message.reply_ids]
+            : args
+          : message.reply_ids;
 
       console.log(replies);
 
-      if (!replies) throw "You didn't provide any message IDs or replies to messages.";
-      
+      if (!replies)
+        throw "You didn't provide any message IDs or replies to messages.";
+
       await generateArchive(replies, c).then((count) => {
         message.reply({
           embeds: [
             {
               title: `${c.user.username}::self`,
               description: `Archived ${count} message(s) to your Saved Notes`,
-              colour: "#CCF5AC"
-            }
-          ]
-        })
-      })
-    })
+              colour: "#CCF5AC",
+            },
+          ],
+        });
+      });
+    });
 
     c.on("message", async (message) => {
       /** @type {boolean} **/
@@ -144,23 +234,38 @@
           const util = utils.get(command);
 
           if (util) {
-            util(args, message).catch((e) => { throw e });
+            util(args, message).catch((e) => {
+              c.user.openDM().then((c) =>
+                c.sendMessage({
+                  content: "",
+                  embeds: [
+                    {
+                      title: "Selfbot Exception",
+                      description: `\`\`\`txt\nJS TRACEBACK:\n${e.stack}\n\`\`\``,
+                      color: "#D14081",
+                    },
+                  ],
+                }),
+              );
+            });
           } else {
-            return
+            return;
           }
         } catch (e) {
-          c.user.openDM().then((c) => c.sendMessage({
-            content: "",
-            embeds: [
-              {
-                title: "Selfbot Exception",
-                description: `\`\`\`txt\nJS TRACEBACK:\n${e.stack}\n\`\`\``,
-                color: "#D14081"
-              }
-            ]
-          }));
+          c.user.openDM().then((c) =>
+            c.sendMessage({
+              content: "",
+              embeds: [
+                {
+                  title: "Selfbot Exception",
+                  description: `\`\`\`txt\nJS TRACEBACK:\n${e.stack}\n\`\`\``,
+                  color: "#D14081",
+                },
+              ],
+            }),
+          );
         }
       }
-    })
+    });
   });
 };
